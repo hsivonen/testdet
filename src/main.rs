@@ -54,7 +54,7 @@ fn chardet(buffer: &[u8]) -> &'static Encoding {
 }
 
 fn check_chardet(encoding: &'static Encoding, bytes: &[u8]) -> bool {
-    let detected = ced(&bytes);
+    let detected = chardet(&bytes);
     let (expected, _) = encoding.decode_without_bom_handling(&bytes);
     let (actual, _) = detected.decode_without_bom_handling(&bytes);
     // println!("{:?}", detected);
