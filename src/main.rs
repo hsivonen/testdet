@@ -29,6 +29,49 @@ extern "C" {
     fn compact_enc_det_detect(text: *const u8, text_len: usize, name_len: *mut usize) -> *const u8;
 }
 
+#[link(name = "icui18n")]
+extern "C" {
+    fn ucsdet_open_60(error: *mut libc::c_int) -> *mut libc::c_void;
+    fn ucsdet_setText_60(
+        det: *mut libc::c_void,
+        buf: *const u8,
+        buf_len: i32,
+        error: *mut libc::c_int,
+    );
+    fn ucsdet_enableInputFilter_60(det: *mut libc::c_void, enabled: bool) -> bool;
+    fn ucsdet_detect_60(det: *mut libc::c_void, error: *mut libc::c_int) -> *mut libc::c_void;
+    fn ucsdet_getName_60(guess: *mut libc::c_void, error: *mut libc::c_int) -> *const libc::c_char;
+    fn ucsdet_close_60(det: *mut libc::c_void);
+}
+
+fn icu(buffer: &[u8]) -> &'static Encoding {
+    unsafe {
+        let mut err = 0;
+        let det = ucsdet_open_60(&mut err);
+        ucsdet_enableInputFilter_60(det, true);
+        ucsdet_setText_60(det, buffer.as_ptr(), buffer.len() as i32, &mut err);
+        let guess = ucsdet_detect_60(det, &mut err);
+        let ret = if guess.is_null() {
+            WINDOWS_1252
+        } else {
+            let name_ptr = ucsdet_getName_60(guess, &mut err);
+            let name_len = libc::strlen(name_ptr);
+            let name = std::slice::from_raw_parts(name_ptr as *const u8, name_len);
+            Encoding::for_label(name).unwrap_or(WINDOWS_1252)
+        };
+        ucsdet_close_60(det);
+        ret
+    }
+}
+
+fn check_icu(encoding: &'static Encoding, bytes: &[u8]) -> bool {
+    let detected = icu(&bytes);
+    let (expected, _) = encoding.decode_without_bom_handling(&bytes);
+    let (actual, _) = detected.decode_without_bom_handling(&bytes);
+    // println!("ICU: {:?}", detected);
+    expected == actual
+}
+
 fn ced(buffer: &[u8]) -> &'static Encoding {
     unsafe {
         let mut name_len = 0usize;
@@ -177,11 +220,12 @@ fn check(s: &str, encoding: &'static Encoding) {
         {
             let chardet = check_chardet(encoding, &bytes);
             let ced = check_ced(encoding, &bytes);
-            if !chardet && !ced {
+            let icu = check_icu(encoding, &bytes);
+            if !chardet && !ced && !icu {
                 // Competition failed, too.
                 return;
             }
-            println!("Expected: {} (score: {}, disqualified: {}), got: {} (score {}), ced {}, chardet {}, input: {}, output: {}", encoding.name(), expected_score, expected_disqualified, detected.name(), detected_score, if ced { "ok" } else { "FAIL" }, if chardet { "ok" } else { "FAIL" }, expected_text, actual_text);
+            println!("Expected: {} (score: {}, disqualified: {}), got: {} (score {}), ced {}, chardet {}, icu {}, input: {}, output: {}", encoding.name(), expected_score, expected_disqualified, detected.name(), detected_score, if ced { "ok" } else { "FAIL" }, if chardet { "ok" } else { "FAIL" }, if icu { "ok" } else { "FAIL" }, expected_text, actual_text);
         }
     }
 }
