@@ -7,6 +7,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use encoding_rs::EUC_JP_INIT;
+use encoding_rs::EUC_KR_INIT;
+use encoding_rs::SHIFT_JIS_INIT;
 use encoding_rs::X_USER_DEFINED;
 use rayon::prelude::*;
 use std::io::BufRead;
@@ -162,6 +165,18 @@ static ENCODING_CLASSES: [EncodingClass; 10] = [
         languages: &["th"],
         name: "thai",
     },
+    /*
+    EncodingClass {
+        encodings: &[&SHIFT_JIS_INIT, &EUC_JP_INIT],
+        languages: &["ja"],
+        name: "japanese",
+    },
+    EncodingClass {
+        encodings: &[&EUC_KR_INIT],
+        languages: &["ko"],
+        name: "korean",
+    },
+    */
 ];
 impl EncodingClass {
     fn test(&'static self, dir: &Path, print: bool, total_scores: &mut ScoreCard) {
