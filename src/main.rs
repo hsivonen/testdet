@@ -9,12 +9,14 @@
 
 use encoding_rs::EUC_JP_INIT;
 use encoding_rs::EUC_KR_INIT;
+use encoding_rs::ISO_8859_8;
 use encoding_rs::SHIFT_JIS_INIT;
 use encoding_rs::X_USER_DEFINED;
 use rayon::prelude::*;
 use std::io::BufRead;
 use std::path::Path;
 use std::path::PathBuf;
+use unicode_reverse::reverse_grapheme_clusters_in_place;
 
 use chardet::UniversalDetector;
 use chardetng::EncodingDetector;
@@ -456,7 +458,16 @@ fn check(
     print: bool,
     score_card: &mut ScoreCard,
 ) {
-    if let Some(bytes) = encode(s, encoding, orthographic) {
+    let mut string;
+    let slice = if encoding == ISO_8859_8 {
+        string = s.to_string();
+        reverse_grapheme_clusters_in_place(&mut string);
+        &string[..]
+    } else {
+        s
+    };
+
+    if let Some(bytes) = encode(slice, encoding, orthographic) {
         let chardet = check_chardet(encoding, &bytes);
         let ced = check_ced(encoding, &bytes);
         let icu = check_icu(encoding, &bytes);
