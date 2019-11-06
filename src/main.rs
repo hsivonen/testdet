@@ -7,10 +7,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use encoding_rs::EUC_JP_INIT;
-use encoding_rs::EUC_KR_INIT;
+use encoding_rs::DecoderResult;
+use encoding_rs::ISO_8859_13_INIT;
+use std::borrow::Cow;
+
 use encoding_rs::ISO_8859_8;
-use encoding_rs::SHIFT_JIS_INIT;
+
 use encoding_rs::X_USER_DEFINED;
 use rayon::prelude::*;
 use std::io::BufRead;
@@ -57,6 +59,85 @@ use std::fs::File;
 use std::io::BufReader;
 use std::process::Command;
 
+static ENCODINGS: [&'static Encoding; 19] = [
+    &WINDOWS_1250_INIT,
+    &WINDOWS_1251_INIT,
+    &WINDOWS_1252_INIT,
+    &WINDOWS_1253_INIT,
+    &WINDOWS_1254_INIT,
+    &WINDOWS_1255_INIT,
+    &WINDOWS_1256_INIT,
+    &WINDOWS_1257_INIT,
+    &WINDOWS_1258_INIT,
+    &WINDOWS_874_INIT,
+    &IBM866_INIT,
+    &KOI8_U_INIT,
+    &ISO_8859_2_INIT,
+    &ISO_8859_4_INIT,
+    &ISO_8859_5_INIT,
+    &ISO_8859_6_INIT,
+    &ISO_8859_7_INIT,
+    &ISO_8859_8_INIT,
+    &ISO_8859_13_INIT,
+];
+
+struct FastEncoder {
+    tables: [[u8; 0x10000]; 19],
+}
+
+impl FastEncoder {
+    fn new() -> Self {
+        let mut instance = FastEncoder {
+            tables: [[0; 0x10000]; 19],
+        };
+        for (j, encoding) in ENCODINGS.iter().enumerate() {
+            let mut decoder = encoding.new_decoder_without_bom_handling();
+            for i in 128..256 {
+                let mut output = [0u16; 2];
+                let input = [i as u8; 1];
+                let (result, read, written) =
+                    decoder.decode_to_utf16_without_replacement(&input, &mut output, false);
+                match result {
+                    DecoderResult::OutputFull => {
+                        unreachable!("Should never be full.");
+                    }
+                    DecoderResult::Malformed(_, _) => {}
+                    DecoderResult::InputEmpty => {
+                        assert_eq!(read, 1);
+                        assert_eq!(written, 1);
+                        instance.tables[j][output[0] as usize] = i as u8;
+                    }
+                }
+            }
+        }
+        instance
+    }
+
+    fn encode<'a>(&self, encoding: &'static Encoding, s: &'a str) -> Cow<'a, [u8]> {
+        let i = ENCODINGS.iter().position(|&x| x == encoding).unwrap();
+        if Encoding::ascii_valid_up_to(s.as_bytes()) == s.len() {
+            return Cow::Borrowed(s.as_bytes());
+        }
+        let table: &[u8; 0x10000] = &self.tables[i];
+        let mut vec = Vec::with_capacity(s.len());
+        for c in s.chars() {
+            if c < '\u{80}' {
+                vec.push(c as u8);
+            } else if c < '\u{10000}' {
+                let b = table[c as usize];
+                if b == 0 {
+                    vec.extend_from_slice(b"&#;");
+                } else {
+                    vec.push(b);
+                }
+            } else {
+                vec.extend_from_slice(b"&#;");
+            }
+        }
+        Cow::Owned(vec)
+    }
+}
+
 fn find_file(dir: &Path, lang: &str) -> PathBuf {
     for entry in dir.read_dir().expect("Reading the title directory failed.") {
         if let Ok(entry) = entry {
@@ -78,6 +159,7 @@ fn test_lang(
     print: bool,
     score_card: &mut ScoreCard,
 ) {
+    let fast_encoder = FastEncoder::new();
     let mut read = BufReader::new(Decoder::new(BufReader::new(File::open(path).unwrap())).unwrap());
     loop {
         let mut buf = String::new();
@@ -90,7 +172,14 @@ fn test_lang(
         } else {
             buf.len()
         };
-        check(&buf[..end], enc, orthographic, print, score_card);
+        check(
+            &buf[..end],
+            enc,
+            orthographic,
+            print,
+            score_card,
+            &fast_encoder,
+        );
     }
 }
 
@@ -148,7 +237,9 @@ static ENCODING_CLASSES: [EncodingClass; 10] = [
         name: "turkish",
     },
     EncodingClass {
-        encodings: &[&WINDOWS_1255_INIT, &ISO_8859_8_INIT],
+        encodings: &[
+            &WINDOWS_1255_INIT, // , &ISO_8859_8_INIT
+        ],
         languages: &["he", "yi"],
         name: "hebrew",
     },
@@ -377,7 +468,12 @@ fn check_ng(
     ))
 }
 
-fn encode<'a>(s: &'a str, encoding: &'static Encoding, orthographic: bool) -> Option<Vec<u8>> {
+fn encode<'a>(
+    s: &'a str,
+    encoding: &'static Encoding,
+    orthographic: bool,
+    fast_encoder: &FastEncoder,
+) -> Option<Vec<u8>> {
     if Encoding::ascii_valid_up_to(s.as_bytes()) == s.len() {
         return None;
     }
@@ -386,10 +482,15 @@ fn encode<'a>(s: &'a str, encoding: &'static Encoding, orthographic: bool) -> Op
             .chars()
             .decompose_vietnamese_tones(orthographic)
             .collect::<String>();
-        let (bytes, _, _) = encoding.encode(&preprocessed);
+        let bytes = if encoding.is_single_byte() {
+            fast_encoder.encode(encoding, &preprocessed)
+        } else {
+            let (bytes, _, _) = encoding.encode(&preprocessed);
+            bytes
+        };
         if Encoding::ascii_valid_up_to(&bytes) == bytes.len() {
             return None;
-        }
+        };
         Some(bytes.into_owned())
     } else if encoding == WINDOWS_1250 || encoding == ISO_8859_2 {
         let preprocessed = s
@@ -457,6 +558,7 @@ fn check(
     orthographic: bool,
     print: bool,
     score_card: &mut ScoreCard,
+    fast_encoder: &FastEncoder,
 ) {
     let mut string;
     let slice = if encoding == ISO_8859_8 {
@@ -467,7 +569,7 @@ fn check(
         s
     };
 
-    if let Some(bytes) = encode(slice, encoding, orthographic) {
+    if let Some(bytes) = encode(slice, encoding, orthographic, fast_encoder) {
         let chardet = check_chardet(encoding, &bytes);
         let ced = check_ced(encoding, &bytes);
         let icu = check_icu(encoding, &bytes);
@@ -541,11 +643,19 @@ fn main() {
         if "check" == command {
             if let Some(label) = args.next() {
                 if let Some(input) = args.next() {
+                    let fast_encoder = FastEncoder::new();
                     let mut score_card = ScoreCard::new();
                     let lang = input.to_str().unwrap();
                     let encoding = Encoding::for_label(label.to_str().unwrap().as_bytes()).unwrap();
                     let orthographic = true;
-                    check(lang, encoding, orthographic, true, &mut score_card);
+                    check(
+                        lang,
+                        encoding,
+                        orthographic,
+                        true,
+                        &mut score_card,
+                        &fast_encoder,
+                    );
                     score_card.print(lang, encoding, true);
                 } else {
                     eprintln!("Error: Test input missing.");
