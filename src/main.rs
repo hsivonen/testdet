@@ -8,7 +8,11 @@
 // except according to those terms.
 
 use encoding_rs::DecoderResult;
+use encoding_rs::EUC_JP_INIT;
+use encoding_rs::EUC_KR_INIT;
 use encoding_rs::ISO_8859_13_INIT;
+use encoding_rs::SHIFT_JIS_INIT;
+use regex::Regex;
 use std::borrow::Cow;
 
 use encoding_rs::ISO_8859_8;
@@ -158,8 +162,10 @@ fn test_lang(
     orthographic: bool,
     print: bool,
     score_card: &mut ScoreCard,
+    fast_encoder: &FastEncoder,
 ) {
-    let fast_encoder = FastEncoder::new();
+    let media_wiki_special =
+        Regex::new(r"^(?:\u{200D}\u{200C})?\p{Alphabetic}+:\p{Alphabetic}+$").unwrap();
     let mut read = BufReader::new(Decoder::new(BufReader::new(File::open(path).unwrap())).unwrap());
     loop {
         let mut buf = String::new();
@@ -172,14 +178,11 @@ fn test_lang(
         } else {
             buf.len()
         };
-        check(
-            &buf[..end],
-            enc,
-            orthographic,
-            print,
-            score_card,
-            &fast_encoder,
-        );
+        let s = &buf[..end];
+        if media_wiki_special.is_match(s) {
+            continue;
+        }
+        check(s, enc, orthographic, print, score_card, &fast_encoder);
     }
 }
 
@@ -190,7 +193,7 @@ struct EncodingClass {
     name: &'static str,
 }
 
-static ENCODING_CLASSES: [EncodingClass; 10] = [
+static ENCODING_CLASSES: [EncodingClass; 12] = [
     // Vietnamese consumes the corpus twice, so put it first
     // to maximize parallelism.
     // In the `encodings` field, the Windows encoding comes first.
@@ -258,7 +261,6 @@ static ENCODING_CLASSES: [EncodingClass; 10] = [
         languages: &["th"],
         name: "thai",
     },
-    /*
     EncodingClass {
         encodings: &[&SHIFT_JIS_INIT, &EUC_JP_INIT],
         languages: &["ja"],
@@ -269,29 +271,27 @@ static ENCODING_CLASSES: [EncodingClass; 10] = [
         languages: &["ko"],
         name: "korean",
     },
-    */
 ];
-impl EncodingClass {
-    fn test(&'static self, dir: &Path, print: bool, total_scores: &mut ScoreCard) {
-        let windows_encoding = self.encodings[0];
 
-        for lang in self.languages {
-            // eprintln!("Testing {:?}", lang);
-            let title_path = find_file(dir, lang);
-            for enc in self.encodings {
-                let mut score_card = ScoreCard::new();
-                test_lang(&title_path, enc, false, print, &mut score_card);
-                score_card.print(lang, enc, false);
-                total_scores.add(&score_card);
-            }
-            if windows_encoding == WINDOWS_1258 {
-                let mut score_card = ScoreCard::new();
-                test_lang(&title_path, WINDOWS_1258, true, print, &mut score_card);
-                score_card.print(lang, WINDOWS_1258, true);
-                total_scores.add(&score_card);
-            }
-        }
-    }
+fn test_one(
+    lang: &str,
+    dir: &Path,
+    enc: &'static Encoding,
+    orthographic: bool,
+    print: bool,
+    fast_encoder: &FastEncoder,
+) -> ScoreCard {
+    let title_path = find_file(dir, lang);
+    let mut score_card = ScoreCard::new();
+    test_lang(
+        &title_path,
+        enc,
+        orthographic,
+        print,
+        &mut score_card,
+        fast_encoder,
+    );
+    score_card
 }
 
 struct ScoreCard {
@@ -603,8 +603,31 @@ fn check(
 }
 
 fn test_all(dir: &Path, print: bool, total_scores: &mut ScoreCard) {
+    let fast_encoder = FastEncoder::new();
+    // There are likely fancy iterator tricks for this.
+    let mut tasks = Vec::new();
     for encoding_class in ENCODING_CLASSES.iter() {
-        encoding_class.test(dir, print, total_scores);
+        for &lang in encoding_class.languages.iter() {
+            for &encoding in encoding_class.encodings.iter() {
+                tasks.push((lang, encoding, false));
+                if encoding == WINDOWS_1258 {
+                    tasks.push((lang, encoding, true));
+                }
+            }
+        }
+    }
+    let score_cards: Vec<ScoreCard> = tasks
+        .par_iter()
+        .map(|&task| {
+            let (lang, encoding, orthographic) = task;
+            let score_card = test_one(lang, dir, encoding, orthographic, print, &fast_encoder);
+            score_card.print(lang, encoding, orthographic);
+            score_card
+        })
+        .collect();
+    // There are probably fancy tricks for this, too.
+    for score_card in score_cards.iter() {
+        total_scores.add(score_card);
     }
 }
 
@@ -690,12 +713,14 @@ fn main() {
                         let encoding =
                             Encoding::for_label(label.to_str().unwrap().as_bytes()).unwrap();
                         let orthographic = true;
+                        let fast_encoder = FastEncoder::new();
                         test_lang(
                             &find_file(Path::new(&path), lang),
                             encoding,
                             orthographic,
                             true,
                             &mut score_card,
+                            &fast_encoder,
                         );
                         score_card.print(lang, encoding, orthographic);
                     } else {

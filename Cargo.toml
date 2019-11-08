@@ -15,4 +15,5 @@ libc = "0.2.58"
 libflate = "0.1.27"
 unicode-reverse = "1.0.8"
 rayon = "1.2.0"
+regex = "1"
 chardetng = { path = "../chardetng/" }
