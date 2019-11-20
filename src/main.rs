@@ -7,6 +7,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use encoding_rs::BIG5;
+use encoding_rs::EUC_KR;
+use encoding_rs::GBK;
+use encoding_rs::BIG5_INIT;
+use encoding_rs::GBK_INIT;
 use encoding_rs::DecoderResult;
 use encoding_rs::EUC_JP_INIT;
 use encoding_rs::EUC_KR_INIT;
@@ -193,7 +198,7 @@ struct EncodingClass {
     name: &'static str,
 }
 
-static ENCODING_CLASSES: [EncodingClass; 12] = [
+static ENCODING_CLASSES: [EncodingClass; 14] = [
     // Vietnamese consumes the corpus twice, so put it first
     // to maximize parallelism.
     // In the `encodings` field, the Windows encoding comes first.
@@ -270,6 +275,16 @@ static ENCODING_CLASSES: [EncodingClass; 12] = [
         encodings: &[&EUC_KR_INIT],
         languages: &["ko"],
         name: "korean",
+    },
+    EncodingClass {
+        encodings: &[&GBK_INIT],
+        languages: &["zh-hans"],
+        name: "simplified",
+    },
+    EncodingClass {
+        encodings: &[&BIG5_INIT],
+        languages: &["zh-hant"],
+        name: "traditional",
     },
 ];
 
@@ -456,15 +471,15 @@ fn check_ng(
     if expected == actual {
         return None;
     }
-    let (detected_score, _) = det.find_score(detected);
-    let (expected_score, expected_disqualified) = det.find_score(encoding);
+    let detected_score = det.find_score(detected);
+    let expected_score = det.find_score(encoding);
     Some((
         detected,
         actual.into_owned(),
-        detected_score,
+        detected_score.unwrap_or(0),
         expected.into_owned(),
-        expected_score,
-        expected_disqualified,
+        expected_score.unwrap_or(0),
+        expected_score.is_none(),
     ))
 }
 
@@ -538,6 +553,18 @@ fn encode<'a>(
             })
             .collect::<String>();
         let (bytes, _, _) = encoding.encode(&preprocessed);
+        if Encoding::ascii_valid_up_to(&bytes) == bytes.len() {
+            return None;
+        }
+        Some(bytes.into_owned())
+    } else if encoding == BIG5 || encoding == EUC_KR || encoding == GBK {
+        for c in s.chars() {
+            if c >= '\u{3040}' && c < '\u{3100}' {
+                // Reject kana
+                return None;
+            }
+        }
+        let (bytes, _, _) = encoding.encode(s);
         if Encoding::ascii_valid_up_to(&bytes) == bytes.len() {
             return None;
         }
