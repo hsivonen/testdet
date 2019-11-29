@@ -455,8 +455,8 @@ fn check_chardet(encoding: &'static Encoding, bytes: &[u8]) -> bool {
 }
 
 fn ng(buffer: &[u8], det: &mut EncodingDetector) -> &'static Encoding {
-    let (enc, _, _) = det.feed(buffer, true);
-    enc
+    det.feed(buffer, true);
+    det.guess(None, false)
 }
 
 fn check_ng(
@@ -495,7 +495,10 @@ fn encode<'a>(
     let bytes = if encoding == WINDOWS_1258 {
         let preprocessed = s
             .chars()
-            .decompose_vietnamese_tones(orthographic)
+            .decompose_vietnamese_tones(orthographic).map(|c| match c {
+                '_' => ' ',
+                _ => c,
+            })
             .collect::<String>();
         let bytes = if encoding.is_single_byte() {
             fast_encoder.encode(encoding, &preprocessed)
@@ -511,6 +514,7 @@ fn encode<'a>(
         let preprocessed = s
             .chars()
             .map(|c| match c {
+                '_' => ' ',
                 'ț' => 'ţ',
                 'ș' => 'ş',
                 'Ț' => 'Ţ',
@@ -527,6 +531,7 @@ fn encode<'a>(
         let preprocessed = s
             .chars()
             .map(|c| match c {
+                '_' => ' ',
                 'Ə' => 'Ä',
                 'ə' => 'ä',
                 _ => c,
@@ -545,6 +550,7 @@ fn encode<'a>(
         let preprocessed = s
             .chars()
             .map(|c| match c {
+                '_' => ' ',
                 'Ү' => 'Ї',
                 'ү' => 'ї',
                 'Ө' => 'Є',
@@ -564,13 +570,27 @@ fn encode<'a>(
                 return None;
             }
         }
-        let (bytes, _, _) = encoding.encode(s);
+        let preprocessed = s
+            .chars()
+            .map(|c| match c {
+                '_' => ' ',
+                _ => c,
+            })
+            .collect::<String>();
+        let (bytes, _, _) = encoding.encode(&preprocessed);
         if Encoding::ascii_valid_up_to(&bytes) == bytes.len() {
             return None;
         }
         Some(bytes.into_owned())
     } else {
-        let (bytes, _, _) = encoding.encode(s);
+        let preprocessed = s
+            .chars()
+            .map(|c| match c {
+                '_' => ' ',
+                _ => c,
+            })
+            .collect::<String>();
+        let (bytes, _, _) = encoding.encode(&preprocessed);
         if Encoding::ascii_valid_up_to(&bytes) == bytes.len() {
             return None;
         }
