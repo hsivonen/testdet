@@ -7,14 +7,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use encoding_rs::BIG5;
-use encoding_rs::EUC_KR;
-use encoding_rs::GBK;
-use encoding_rs::BIG5_INIT;
-use encoding_rs::GBK_INIT;
 use encoding_rs::DecoderResult;
+use encoding_rs::BIG5;
+use encoding_rs::BIG5_INIT;
 use encoding_rs::EUC_JP_INIT;
+use encoding_rs::EUC_KR;
 use encoding_rs::EUC_KR_INIT;
+use encoding_rs::GBK;
+use encoding_rs::GBK_INIT;
 use encoding_rs::ISO_8859_13_INIT;
 use encoding_rs::SHIFT_JIS_INIT;
 use regex::Regex;
@@ -163,6 +163,7 @@ fn find_file(dir: &Path, lang: &str) -> PathBuf {
 
 fn test_lang(
     path: &Path,
+    tld: Option<&[u8]>,
     enc: &'static Encoding,
     orthographic: bool,
     print: bool,
@@ -187,14 +188,14 @@ fn test_lang(
         if media_wiki_special.is_match(s) {
             continue;
         }
-        check(s, enc, orthographic, print, score_card, &fast_encoder);
+        check(s, tld, enc, orthographic, print, score_card, &fast_encoder);
     }
 }
 
 #[derive(Debug)]
 struct EncodingClass {
     encodings: &'static [&'static Encoding],
-    languages: &'static [&'static str],
+    languages: &'static [(&'static str, &'static str)],
     name: &'static str,
 }
 
@@ -204,12 +205,22 @@ static ENCODING_CLASSES: [EncodingClass; 14] = [
     // In the `encodings` field, the Windows encoding comes first.
     EncodingClass {
         encodings: &[&WINDOWS_1258_INIT],
-        languages: &["vi"],
+        languages: &[("vi", "vi")],
         name: "vietnamese",
     },
     EncodingClass {
         encodings: &[&WINDOWS_1250_INIT, &ISO_8859_2_INIT],
-        languages: &["pl", "hu", "sh", "cs", "ro", "sk", "hr", "sl", "bs", "sq"],
+        languages: &[
+            ("pl", "pl"),
+            ("hu", "hu"),
+            ("sh", "hr"),
+            ("cs", "cz"),
+            ("ro", "ro"),
+            ("sk", "sk"),
+            ("hr", "hr"),
+            ("sl", "si"),
+            ("bs", "ba"),
+        ],
         name: "central",
     },
     EncodingClass {
@@ -222,74 +233,107 @@ static ENCODING_CLASSES: [EncodingClass; 14] = [
         ],
         // kk, tt, tg, and os don't fit
         // mn uses mapping to uk letters
-        languages: &["ru", "uk", "sr", "bg", "ce", "be", "mk", "mn"],
+        languages: &[
+            ("ru", "ru"),
+            ("uk", "ua"),
+            ("sr", "rs"),
+            ("bg", "bg"),
+            ("ce", "ru"),
+            ("be", "by"),
+            ("mk", "mk"),
+            ("mn", "mn"),
+        ],
         name: "cyrillic",
     },
     EncodingClass {
         encodings: &[&WINDOWS_1252_INIT],
         // Intentionally omitting ASCII languages like en, nl, id, so, sw, various Malay-alphabet languages
         languages: &[
-            "sv", "de", "fr", "it", "es", "pt", "ca", "no", "fi", "eu", "da", "gl", "nn", "oc",
-            "br", "lb", "ht", "ga", "is", "an", "wa", "gd", "fo", "li",
+            ("sv", "se"),
+            ("de", "de"),
+            ("fr", "fr"),
+            ("it", "it"),
+            ("es", "es"),
+            ("pt", "pt"),
+            ("ca", "es"),
+            ("no", "no"),
+            ("fi", "fi"),
+            ("eu", "es"),
+            ("da", "dk"),
+            ("gl", "es"),
+            ("nn", "no"),
+            ("oc", "fr"),
+            ("br", "fr"),
+            ("lb", "lu"),
+            ("ht", "ht"),
+            ("ga", "es"),
+            ("is", "is"),
+            ("an", "es"),
+            ("wa", "be"),
+            ("gd", "uk"),
+            ("fo", "fo"),
+            ("li", "be"),
+            ("sq", "al"),
         ],
         name: "western",
     },
     EncodingClass {
         encodings: &[&WINDOWS_1253_INIT, &ISO_8859_7_INIT],
-        languages: &["el"],
+        languages: &[("el", "gr")],
         name: "greek",
     },
     EncodingClass {
         encodings: &[&WINDOWS_1254_INIT],
-        languages: &["tr", "az", "ku"],
+        languages: &[("tr", "tr"), ("az", "az"), ("ku", "tr")],
         name: "turkish",
     },
     EncodingClass {
         encodings: &[
             &WINDOWS_1255_INIT, // , &ISO_8859_8_INIT
         ],
-        languages: &["he", "yi"],
+        languages: &[("he", "il"), ("yi", "il")],
         name: "hebrew",
     },
     EncodingClass {
         encodings: &[&WINDOWS_1256_INIT, &ISO_8859_6_INIT],
-        languages: &["ar", "fa", "ur"],
+        languages: &[("ar", "sa"), ("fa", "ir"), ("ur", "pk")],
         name: "arabic",
     },
     EncodingClass {
         encodings: &[&WINDOWS_1257_INIT, &ISO_8859_4_INIT],
-        languages: &["lt", "et", "lv"],
+        languages: &[("lt", "lt"), ("et", "ee"), ("lv", "lv")],
         name: "baltic",
     },
     EncodingClass {
         encodings: &[&WINDOWS_874_INIT],
-        languages: &["th"],
+        languages: &[("th", "th")],
         name: "thai",
     },
     EncodingClass {
         encodings: &[&SHIFT_JIS_INIT, &EUC_JP_INIT],
-        languages: &["ja"],
+        languages: &[("ja", "jp")],
         name: "japanese",
     },
     EncodingClass {
         encodings: &[&EUC_KR_INIT],
-        languages: &["ko"],
+        languages: &[("ko", "kr")],
         name: "korean",
     },
     EncodingClass {
         encodings: &[&GBK_INIT],
-        languages: &["zh-hans"],
+        languages: &[("zh-hans", "cn")],
         name: "simplified",
     },
     EncodingClass {
         encodings: &[&BIG5_INIT],
-        languages: &["zh-hant"],
+        languages: &[("zh-hant", "tw")],
         name: "traditional",
     },
 ];
 
 fn test_one(
     lang: &str,
+    tld: Option<&[u8]>,
     dir: &Path,
     enc: &'static Encoding,
     orthographic: bool,
@@ -300,6 +344,7 @@ fn test_one(
     let mut score_card = ScoreCard::new();
     test_lang(
         &title_path,
+        tld,
         enc,
         orthographic,
         print,
@@ -454,17 +499,18 @@ fn check_chardet(encoding: &'static Encoding, bytes: &[u8]) -> bool {
     expected == actual
 }
 
-fn ng(buffer: &[u8], det: &mut EncodingDetector) -> &'static Encoding {
+fn ng(buffer: &[u8], det: &mut EncodingDetector, tld: Option<&[u8]>) -> &'static Encoding {
     det.feed(buffer, true);
-    det.guess(None, false)
+    det.guess(tld, false)
 }
 
 fn check_ng(
+    tld: Option<&[u8]>,
     encoding: &'static Encoding,
     bytes: &[u8],
 ) -> Option<(&'static Encoding, String, i64, String, i64, bool)> {
     let mut det = EncodingDetector::new();
-    let detected = ng(&bytes, &mut det);
+    let detected = ng(&bytes, &mut det, tld);
     let (expected, _) = encoding.decode_without_bom_handling(&bytes);
     let (actual, _) = detected.decode_without_bom_handling(&bytes);
     // println!("{:?}", detected);
@@ -495,7 +541,8 @@ fn encode<'a>(
     let bytes = if encoding == WINDOWS_1258 {
         let preprocessed = s
             .chars()
-            .decompose_vietnamese_tones(orthographic).map(|c| match c {
+            .decompose_vietnamese_tones(orthographic)
+            .map(|c| match c {
                 '_' => ' ',
                 _ => c,
             })
@@ -601,6 +648,7 @@ fn encode<'a>(
 
 fn check(
     s: &str,
+    tld: Option<&[u8]>,
     encoding: &'static Encoding,
     orthographic: bool,
     print: bool,
@@ -633,7 +681,7 @@ fn check(
             expected_text,
             expected_score,
             expected_disqualified,
-        )) = check_ng(encoding, &bytes)
+        )) = check_ng(tld, encoding, &bytes)
         {
             if !print {
                 return;
@@ -649,16 +697,16 @@ fn check(
     }
 }
 
-fn test_all(dir: &Path, print: bool, total_scores: &mut ScoreCard) {
+fn test_all(dir: &Path, print: bool, use_tld: bool, total_scores: &mut ScoreCard) {
     let fast_encoder = FastEncoder::new();
     // There are likely fancy iterator tricks for this.
     let mut tasks = Vec::new();
     for encoding_class in ENCODING_CLASSES.iter() {
-        for &lang in encoding_class.languages.iter() {
+        for (lang, tld) in encoding_class.languages.iter() {
             for &encoding in encoding_class.encodings.iter() {
-                tasks.push((lang, encoding, false));
+                tasks.push((lang, tld, encoding, false));
                 if encoding == WINDOWS_1258 {
-                    tasks.push((lang, encoding, true));
+                    tasks.push((lang, tld, encoding, true));
                 }
             }
         }
@@ -666,8 +714,16 @@ fn test_all(dir: &Path, print: bool, total_scores: &mut ScoreCard) {
     let score_cards: Vec<ScoreCard> = tasks
         .par_iter()
         .map(|&task| {
-            let (lang, encoding, orthographic) = task;
-            let score_card = test_one(lang, dir, encoding, orthographic, print, &fast_encoder);
+            let (lang, tld, encoding, orthographic) = task;
+            let score_card = test_one(
+                lang,
+                if use_tld { Some(tld.as_bytes()) } else { None },
+                dir,
+                encoding,
+                orthographic,
+                print,
+                &fast_encoder,
+            );
             score_card.print(lang, encoding, orthographic);
             score_card
         })
@@ -686,7 +742,7 @@ fn download_titles(dir: &Path) {
     curl.arg("-L");
     curl.arg("--remote-name-all");
     for encoding_class in ENCODING_CLASSES.iter() {
-        for lang in encoding_class.languages.iter() {
+        for (lang, _) in encoding_class.languages.iter() {
             let mut url = String::new();
             url.push_str(prefix);
             url.push_str(lang);
@@ -715,18 +771,19 @@ fn main() {
                 if let Some(input) = args.next() {
                     let fast_encoder = FastEncoder::new();
                     let mut score_card = ScoreCard::new();
-                    let lang = input.to_str().unwrap();
+                    let input_string = input.to_str().unwrap();
                     let encoding = Encoding::for_label(label.to_str().unwrap().as_bytes()).unwrap();
                     let orthographic = true;
                     check(
-                        lang,
+                        input_string,
+                        None,
                         encoding,
                         orthographic,
                         true,
                         &mut score_card,
                         &fast_encoder,
                     );
-                    score_card.print(lang, encoding, true);
+                    score_card.print(input_string, encoding, true);
                 } else {
                     eprintln!("Error: Test input missing.");
                     std::process::exit(-3);
@@ -742,27 +799,43 @@ fn main() {
                 eprintln!("Error: Download directory missing.");
                 std::process::exit(-3);
             }
-        } else if "all" == command {
+        } else if "all" == command || "tld" == command {
             if let Some(dir) = args.next() {
                 let mut score_card = ScoreCard::new();
-                test_all(Path::new(&dir), false, &mut score_card);
+                test_all(Path::new(&dir), false, "tld" == command, &mut score_card);
                 score_card.print("Combined", X_USER_DEFINED, true);
             } else {
                 eprintln!("Error: Download directory missing.");
                 std::process::exit(-3);
             }
-        } else if "lang" == command {
+        } else if "lang" == command || "langtld" == command {
             if let Some(label) = args.next() {
                 if let Some(language) = args.next() {
                     if let Some(path) = args.next() {
                         let mut score_card = ScoreCard::new();
-                        let lang = language.to_str().unwrap();
+                        let language_str = language.to_str().unwrap();
+                        let (lang, tld) = if "langtld" == command {
+                            let mut i = language_str.len() - 1;
+                            loop {
+                                if language_str.as_bytes()[i] == b'-' {
+                                    break;
+                                }
+                                i -= 1;
+                            }
+                            (
+                                &language_str[..i],
+                                Some((&language_str[i + 1..]).as_bytes()),
+                            )
+                        } else {
+                            (language_str, None)
+                        };
                         let encoding =
                             Encoding::for_label(label.to_str().unwrap().as_bytes()).unwrap();
                         let orthographic = true;
                         let fast_encoder = FastEncoder::new();
                         test_lang(
                             &find_file(Path::new(&path), lang),
+                            tld,
                             encoding,
                             orthographic,
                             true,
