@@ -15,7 +15,10 @@ libflate = "0.1.27"
 unicode-reverse = "1.0.8"
 rayon = "1.2.0"
 regex = "1"
-chardetng = { path = "../chardetng/" }
+
+[dependencies.chardetng]
+path = "../chardetng/"
+features = ["testing-only-no-semver-guarantees-do-not-use"]
 
 [dependencies.encoding_rs]
 version = "0.8.17"
