@@ -274,6 +274,7 @@ static ENCODING_CLASSES: [EncodingClass; 14] = [
             ("fo", "fo"),
             ("li", "be"),
             ("sq", "al"),
+            ("et", "ee"),
         ],
         name: "western",
     },
@@ -301,7 +302,7 @@ static ENCODING_CLASSES: [EncodingClass; 14] = [
     },
     EncodingClass {
         encodings: &[&WINDOWS_1257_INIT, &ISO_8859_4_INIT],
-        languages: &[("lt", "lt"), ("et", "ee"), ("lv", "lv")],
+        languages: &[("lt", "lt"), ("lv", "lv")],
         name: "baltic",
     },
     EncodingClass {
