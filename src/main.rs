@@ -199,7 +199,7 @@ struct EncodingClass {
     name: &'static str,
 }
 
-static ENCODING_CLASSES: [EncodingClass; 14] = [
+static ENCODING_CLASSES: [EncodingClass; 18] = [
     // Vietnamese consumes the corpus twice, so put it first
     // to maximize parallelism.
     // In the `encodings` field, the Windows encoding comes first.
@@ -235,15 +235,40 @@ static ENCODING_CLASSES: [EncodingClass; 14] = [
         // mn uses mapping to uk letters
         languages: &[
             ("ru", "ru"),
-            ("uk", "ua"),
+            ("ce", "ru"),
+        ],
+        name: "russia",
+    },
+    EncodingClass {
+        // IE and Chromium don't detect x-mac-cyrillic.
+        encodings: &[
+            &WINDOWS_1251_INIT,
+            &KOI8_U_INIT,
+            &ISO_8859_5_INIT,
+        ],
+        // kk, tt, tg, and os don't fit
+        // mn uses mapping to uk letters
+        languages: &[
             ("sr", "rs"),
             ("bg", "bg"),
-            ("ce", "ru"),
             ("be", "by"),
             ("mk", "mk"),
+        ],
+        name: "cyrillic-iso",
+    },
+    EncodingClass {
+        // IE and Chromium don't detect x-mac-cyrillic.
+        encodings: &[
+            &WINDOWS_1251_INIT,
+            &KOI8_U_INIT,
+        ],
+        // kk, tt, tg, and os don't fit
+        // mn uses mapping to uk letters
+        languages: &[
+            ("uk", "ua"),
             ("mn", "mn"),
         ],
-        name: "cyrillic",
+        name: "ukrainian",
     },
     EncodingClass {
         encodings: &[&WINDOWS_1252_INIT],
@@ -274,7 +299,6 @@ static ENCODING_CLASSES: [EncodingClass; 14] = [
             ("fo", "fo"),
             ("li", "be"),
             ("sq", "al"),
-            ("et", "ee"),
         ],
         name: "western",
     },
@@ -297,8 +321,18 @@ static ENCODING_CLASSES: [EncodingClass; 14] = [
     },
     EncodingClass {
         encodings: &[&WINDOWS_1256_INIT, &ISO_8859_6_INIT],
-        languages: &[("ar", "sa"), ("fa", "ir"), ("ur", "pk")],
+        languages: &[("ar", "sa")],
         name: "arabic",
+    },
+    EncodingClass {
+        encodings: &[&WINDOWS_1256_INIT],
+        languages: &[("fa", "ir"), ("ur", "pk")],
+        name: "persian-urdu",
+    },
+    EncodingClass {
+        encodings: &[&WINDOWS_1252_INIT, &WINDOWS_1257_INIT, &ISO_8859_4_INIT],
+        languages: &[("et", "ee")],
+        name: "estonian",
     },
     EncodingClass {
         encodings: &[&WINDOWS_1257_INIT, &ISO_8859_4_INIT],
