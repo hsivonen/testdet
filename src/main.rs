@@ -7,6 +7,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use bzip2::bufread::BzDecoder;
 use encoding_rs::DecoderResult;
 use encoding_rs::BIG5;
 use encoding_rs::BIG5_INIT;
@@ -17,6 +18,7 @@ use encoding_rs::GBK;
 use encoding_rs::GBK_INIT;
 use encoding_rs::ISO_8859_13_INIT;
 use encoding_rs::SHIFT_JIS_INIT;
+use quick_xml::events::Event;
 use regex::Regex;
 use std::borrow::Cow;
 
@@ -67,6 +69,7 @@ use libflate::gzip::Decoder;
 use std::fs::File;
 use std::io::BufReader;
 use std::process::Command;
+use unic_normal::StrNormalForm;
 
 static ENCODINGS: [&'static Encoding; 19] = [
     &WINDOWS_1250_INIT,
@@ -147,17 +150,21 @@ impl FastEncoder {
     }
 }
 
-fn find_file(dir: &Path, lang: &str) -> PathBuf {
+fn find_file(dir: &Path, lang: &str, full_articles: bool) -> PathBuf {
     for entry in dir.read_dir().expect("Reading the title directory failed.") {
         if let Ok(entry) = entry {
             let name = entry.file_name();
             let s = name.to_string_lossy();
-            if s.starts_with(lang) && s.ends_with(".gz") {
+            if s.starts_with(lang) && s.ends_with(if full_articles { ".bz2" } else { ".gz" }) {
                 return entry.path();
             }
         }
     }
-    eprintln!("Error: No titles for: {}", lang);
+    if full_articles {
+        eprintln!("Error: No articles for: {}", lang);
+    } else {
+        eprintln!("Error: No titles for: {}", lang);
+    }
     std::process::exit(-4);
 }
 
@@ -173,8 +180,9 @@ fn test_lang(
     let media_wiki_special =
         Regex::new(r"^(?:\u{200D}\u{200C})?\p{Alphabetic}+:\p{Alphabetic}+$").unwrap();
     let mut read = BufReader::new(Decoder::new(BufReader::new(File::open(path).unwrap())).unwrap());
+    let mut buf = String::new();
     loop {
-        let mut buf = String::new();
+        buf.clear();
         let num_read = read.read_line(&mut buf).unwrap();
         if num_read == 0 {
             return;
@@ -189,6 +197,64 @@ fn test_lang(
             continue;
         }
         check(s, tld, enc, orthographic, print, score_card, &fast_encoder);
+    }
+}
+
+fn test_lang_full(
+    path: &Path,
+    tld: Option<&[u8]>,
+    enc: &'static Encoding,
+    orthographic: bool,
+    print: bool,
+    score_card: &mut ScoreCard,
+    fast_encoder: &FastEncoder,
+) {
+    let mut xml = quick_xml::Reader::from_reader(BufReader::new(BzDecoder::new(BufReader::new(
+        File::open(path).unwrap(),
+    ))));
+    let mut text = String::new();
+    let mut buf = Vec::new();
+    text.clear();
+    let mut text_open = false;
+    loop {
+        match xml.read_event(&mut buf) {
+            Ok(Event::Start(ref e)) => match e.name() {
+                b"text" => {
+                    assert!(!text_open);
+                    text_open = true;
+                    text.clear();
+                }
+                _ => {}
+            },
+            Ok(Event::End(ref e)) => match e.name() {
+                b"text" => {
+                    assert!(text_open);
+                    if text.len() > 6000 {
+                        check(
+                            &text,
+                            tld,
+                            enc,
+                            orthographic,
+                            print,
+                            score_card,
+                            &fast_encoder,
+                        );
+                    }
+                    text.clear();
+                    text_open = false;
+                }
+                _ => {}
+            },
+            Ok(Event::Text(e)) | Ok(Event::CData(e)) => {
+                if text_open {
+                    text.push_str(&e.unescape_and_decode(&xml).unwrap());
+                }
+            }
+            Err(e) => panic!("XML error {}: {:?}", xml.buffer_position(), e),
+            Ok(Event::Eof) => break,
+            _ => {}
+        }
+        buf.clear();
     }
 }
 
@@ -233,41 +299,23 @@ static ENCODING_CLASSES: [EncodingClass; 18] = [
         ],
         // kk, tt, tg, and os don't fit
         // mn uses mapping to uk letters
-        languages: &[
-            ("ru", "ru"),
-            ("ce", "ru"),
-        ],
+        languages: &[("ru", "ru"), ("ce", "ru")],
         name: "russia",
     },
     EncodingClass {
         // IE and Chromium don't detect x-mac-cyrillic.
-        encodings: &[
-            &WINDOWS_1251_INIT,
-            &KOI8_U_INIT,
-            &ISO_8859_5_INIT,
-        ],
+        encodings: &[&WINDOWS_1251_INIT, &KOI8_U_INIT, &ISO_8859_5_INIT],
         // kk, tt, tg, and os don't fit
         // mn uses mapping to uk letters
-        languages: &[
-            ("sr", "rs"),
-            ("bg", "bg"),
-            ("be", "by"),
-            ("mk", "mk"),
-        ],
+        languages: &[("sr", "rs"), ("bg", "bg"), ("be", "by"), ("mk", "mk")],
         name: "cyrillic-iso",
     },
     EncodingClass {
         // IE and Chromium don't detect x-mac-cyrillic.
-        encodings: &[
-            &WINDOWS_1251_INIT,
-            &KOI8_U_INIT,
-        ],
+        encodings: &[&WINDOWS_1251_INIT, &KOI8_U_INIT],
         // kk, tt, tg, and os don't fit
         // mn uses mapping to uk letters
-        languages: &[
-            ("uk", "ua"),
-            ("mn", "mn"),
-        ],
+        languages: &[("uk", "ua"), ("mn", "mn")],
         name: "ukrainian",
     },
     EncodingClass {
@@ -374,18 +422,31 @@ fn test_one(
     orthographic: bool,
     print: bool,
     fast_encoder: &FastEncoder,
+    full_articles: bool,
 ) -> ScoreCard {
-    let title_path = find_file(dir, lang);
+    let path = find_file(dir, lang, full_articles);
     let mut score_card = ScoreCard::new();
-    test_lang(
-        &title_path,
-        tld,
-        enc,
-        orthographic,
-        print,
-        &mut score_card,
-        fast_encoder,
-    );
+    if full_articles {
+        test_lang_full(
+            &path,
+            tld,
+            enc,
+            orthographic,
+            print,
+            &mut score_card,
+            fast_encoder,
+        );
+    } else {
+        test_lang(
+            &path,
+            tld,
+            enc,
+            orthographic,
+            print,
+            &mut score_card,
+            fast_encoder,
+        );
+    }
     score_card
 }
 
@@ -576,6 +637,7 @@ fn encode<'a>(
     let bytes = if encoding == WINDOWS_1258 {
         let preprocessed = s
             .chars()
+            .nfc()
             .decompose_vietnamese_tones(orthographic)
             .map(|c| match c {
                 '_' => ' ',
@@ -595,6 +657,7 @@ fn encode<'a>(
     } else if encoding == WINDOWS_1250 || encoding == ISO_8859_2 {
         let preprocessed = s
             .chars()
+            .nfc()
             .map(|c| match c {
                 '_' => ' ',
                 'ț' => 'ţ',
@@ -612,6 +675,7 @@ fn encode<'a>(
     } else if encoding == WINDOWS_1254 {
         let preprocessed = s
             .chars()
+            .nfc()
             .map(|c| match c {
                 '_' => ' ',
                 'Ə' => 'Ä',
@@ -631,6 +695,7 @@ fn encode<'a>(
     {
         let preprocessed = s
             .chars()
+            .nfc()
             .map(|c| match c {
                 '_' => ' ',
                 'Ү' => 'Ї',
@@ -654,6 +719,7 @@ fn encode<'a>(
         }
         let preprocessed = s
             .chars()
+            .nfc()
             .map(|c| match c {
                 '_' => ' ',
                 _ => c,
@@ -667,6 +733,7 @@ fn encode<'a>(
     } else {
         let preprocessed = s
             .chars()
+            .nfc()
             .map(|c| match c {
                 '_' => ' ',
                 _ => c,
@@ -732,7 +799,13 @@ fn check(
     }
 }
 
-fn test_all(dir: &Path, print: bool, use_tld: bool, total_scores: &mut ScoreCard) {
+fn test_all(
+    dir: &Path,
+    print: bool,
+    use_tld: bool,
+    total_scores: &mut ScoreCard,
+    full_articles: bool,
+) {
     let fast_encoder = FastEncoder::new();
     // There are likely fancy iterator tricks for this.
     let mut tasks = Vec::new();
@@ -758,6 +831,7 @@ fn test_all(dir: &Path, print: bool, use_tld: bool, total_scores: &mut ScoreCard
                 orthographic,
                 print,
                 &fast_encoder,
+                full_articles,
             );
             score_card.print(lang, encoding, orthographic);
             score_card
@@ -834,10 +908,17 @@ fn main() {
                 eprintln!("Error: Download directory missing.");
                 std::process::exit(-3);
             }
-        } else if "all" == command || "tld" == command {
+        } else if "all" == command || "tld" == command || "full" == command || "full_tld" == command
+        {
             if let Some(dir) = args.next() {
                 let mut score_card = ScoreCard::new();
-                test_all(Path::new(&dir), false, "tld" == command, &mut score_card);
+                test_all(
+                    Path::new(&dir),
+                    false,
+                    "tld" == command || "full_tld" == command,
+                    &mut score_card,
+                    "full" == command || "full_tld" == command,
+                );
                 score_card.print("Combined", X_USER_DEFINED, true);
             } else {
                 eprintln!("Error: Download directory missing.");
@@ -869,7 +950,7 @@ fn main() {
                         let orthographic = true;
                         let fast_encoder = FastEncoder::new();
                         test_lang(
-                            &find_file(Path::new(&path), lang),
+                            &find_file(Path::new(&path), lang, false),
                             tld,
                             encoding,
                             orthographic,
@@ -879,7 +960,7 @@ fn main() {
                         );
                         score_card.print(lang, encoding, orthographic);
                     } else {
-                        eprintln!("Error: Downoald directory missing.");
+                        eprintln!("Error: Download directory missing.");
                         std::process::exit(-3);
                     }
                 } else {
