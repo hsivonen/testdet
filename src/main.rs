@@ -176,6 +176,7 @@ fn test_lang(
     print: bool,
     score_card: &mut ScoreCard,
     fast_encoder: &FastEncoder,
+    mode: CheckMode,
 ) {
     let media_wiki_special =
         Regex::new(r"^(?:\u{200D}\u{200C})?\p{Alphabetic}+:\p{Alphabetic}+$").unwrap();
@@ -196,7 +197,16 @@ fn test_lang(
         if media_wiki_special.is_match(s) {
             continue;
         }
-        check(s, tld, enc, orthographic, print, score_card, &fast_encoder);
+        check(
+            s,
+            tld,
+            enc,
+            orthographic,
+            print,
+            score_card,
+            &fast_encoder,
+            mode,
+        );
     }
 }
 
@@ -208,6 +218,7 @@ fn test_lang_full(
     print: bool,
     score_card: &mut ScoreCard,
     fast_encoder: &FastEncoder,
+    mode: CheckMode,
 ) {
     let mut xml = quick_xml::Reader::from_reader(BufReader::new(BzDecoder::new(BufReader::new(
         File::open(path).unwrap(),
@@ -238,6 +249,7 @@ fn test_lang_full(
                             print,
                             score_card,
                             &fast_encoder,
+                            mode,
                         );
                     }
                     text.clear();
@@ -423,6 +435,7 @@ fn test_one(
     print: bool,
     fast_encoder: &FastEncoder,
     full_articles: bool,
+    mode: CheckMode,
 ) -> ScoreCard {
     let path = find_file(dir, lang, full_articles);
     let mut score_card = ScoreCard::new();
@@ -435,6 +448,7 @@ fn test_one(
             print,
             &mut score_card,
             fast_encoder,
+            mode,
         );
     } else {
         test_lang(
@@ -445,6 +459,7 @@ fn test_one(
             print,
             &mut score_card,
             fast_encoder,
+            mode,
         );
     }
     score_card
@@ -748,6 +763,13 @@ fn encode<'a>(
     bytes
 }
 
+#[derive(Eq, PartialEq, Copy, Clone)]
+enum CheckMode {
+    All,
+    Ng,
+    Ced,
+}
+
 fn check(
     s: &str,
     tld: Option<&[u8]>,
@@ -756,6 +778,7 @@ fn check(
     print: bool,
     score_card: &mut ScoreCard,
     fast_encoder: &FastEncoder,
+    mode: CheckMode,
 ) {
     let mut string;
     let slice = if encoding == ISO_8859_8 {
@@ -767,35 +790,95 @@ fn check(
     };
 
     if let Some(bytes) = encode(slice, encoding, orthographic, fast_encoder) {
-        let chardet = check_chardet(encoding, &bytes);
-        let ced = check_ced(encoding, &bytes);
-        let icu = check_icu(encoding, &bytes);
+        let chardet = if mode == CheckMode::All {
+            check_chardet(encoding, &bytes)
+        } else {
+            true
+        };
+        let ced = if mode == CheckMode::All || mode == CheckMode::Ced {
+            check_ced(encoding, &bytes)
+        } else {
+            true
+        };
+        let icu = if mode == CheckMode::All {
+            check_icu(encoding, &bytes)
+        } else {
+            true
+        };
 
         score_card.total += 1;
         score_card.chardet += chardet as u64;
         score_card.ced += ced as u64;
         score_card.icu += icu as u64;
 
-        if let Some((
-            detected,
-            actual_text,
-            detected_score,
-            expected_text,
-            expected_score,
-            expected_disqualified,
-        )) = check_ng(tld, encoding, &bytes)
-        {
-            if !print {
-                return;
+        if mode != CheckMode::Ced {
+            if let Some((
+                detected,
+                actual_text,
+                detected_score,
+                expected_text,
+                expected_score,
+                expected_disqualified,
+            )) = check_ng(tld, encoding, &bytes)
+            {
+                if !print {
+                    return;
+                }
+                if !chardet && !ced && !icu {
+                    println!("All failed");
+                    return;
+                }
+                println!("Expected: {} (score: {}, disqualified: {}), got: {} (score {}), ced {}, chardet {}, icu {}, input: {}, output: {}", encoding.name(), expected_score, expected_disqualified, detected.name(), detected_score, if ced { "ok" } else { "FAIL" }, if chardet { "ok" } else { "FAIL" }, if icu { "ok" } else { "FAIL" }, expected_text, actual_text);
+            } else {
+                score_card.ng += 1;
             }
-            if !chardet && !ced && !icu {
-                println!("All failed");
-                return;
-            }
-            println!("Expected: {} (score: {}, disqualified: {}), got: {} (score {}), ced {}, chardet {}, icu {}, input: {}, output: {}", encoding.name(), expected_score, expected_disqualified, detected.name(), detected_score, if ced { "ok" } else { "FAIL" }, if chardet { "ok" } else { "FAIL" }, if icu { "ok" } else { "FAIL" }, expected_text, actual_text);
-        } else {
-            score_card.ng += 1;
         }
+    }
+}
+
+fn bench_all(
+    dir: &Path,
+    print: bool,
+    use_tld: bool,
+    total_scores: &mut ScoreCard,
+    full_articles: bool,
+    mode: CheckMode,
+) {
+    let fast_encoder = FastEncoder::new();
+    // There are likely fancy iterator tricks for this.
+    let mut tasks = Vec::new();
+    for encoding_class in ENCODING_CLASSES.iter() {
+        for (lang, tld) in encoding_class.languages.iter() {
+            for &encoding in encoding_class.encodings.iter() {
+                tasks.push((lang, tld, encoding, false));
+                if encoding == WINDOWS_1258 {
+                    tasks.push((lang, tld, encoding, true));
+                }
+            }
+        }
+    }
+    let score_cards: Vec<ScoreCard> = tasks
+        .iter() // Intentionally _not_ Rayon!
+        .map(|&task| {
+            let (lang, tld, encoding, orthographic) = task;
+            let score_card = test_one(
+                lang,
+                if use_tld { Some(tld.as_bytes()) } else { None },
+                dir,
+                encoding,
+                orthographic,
+                print,
+                &fast_encoder,
+                full_articles,
+                mode,
+            );
+            score_card.print(lang, encoding, orthographic);
+            score_card
+        })
+        .collect();
+    // There are probably fancy tricks for this, too.
+    for score_card in score_cards.iter() {
+        total_scores.add(score_card);
     }
 }
 
@@ -832,6 +915,7 @@ fn test_all(
                 print,
                 &fast_encoder,
                 full_articles,
+                CheckMode::All,
             );
             score_card.print(lang, encoding, orthographic);
             score_card
@@ -891,6 +975,7 @@ fn main() {
                         true,
                         &mut score_card,
                         &fast_encoder,
+                        CheckMode::All,
                     );
                     score_card.print(input_string, encoding, true);
                 } else {
@@ -918,6 +1003,26 @@ fn main() {
                     "tld" == command || "full_tld" == command,
                     &mut score_card,
                     "full" == command || "full_tld" == command,
+                );
+                score_card.print("Combined", X_USER_DEFINED, true);
+            } else {
+                eprintln!("Error: Download directory missing.");
+                std::process::exit(-3);
+            }
+        } else if "bench_ng" == command || "bench_ced" == command {
+            if let Some(dir) = args.next() {
+                let mut score_card = ScoreCard::new();
+                bench_all(
+                    Path::new(&dir),
+                    false,
+                    false,
+                    &mut score_card,
+                    true,
+                    if "bench_ng" == command {
+                        CheckMode::Ng
+                    } else {
+                        CheckMode::Ced
+                    },
                 );
                 score_card.print("Combined", X_USER_DEFINED, true);
             } else {
@@ -957,6 +1062,7 @@ fn main() {
                             true,
                             &mut score_card,
                             &fast_encoder,
+                            CheckMode::All,
                         );
                         score_card.print(lang, encoding, orthographic);
                     } else {
