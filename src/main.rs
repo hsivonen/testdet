@@ -177,6 +177,8 @@ fn test_lang(
     score_card: &mut ScoreCard,
     fast_encoder: &FastEncoder,
     mode: CheckMode,
+    max_non_ascii: usize,
+    chunk: usize,
 ) {
     let media_wiki_special =
         Regex::new(r"^(?:\u{200D}\u{200C})?\p{Alphabetic}+:\p{Alphabetic}+$").unwrap();
@@ -206,6 +208,8 @@ fn test_lang(
             score_card,
             &fast_encoder,
             mode,
+            max_non_ascii,
+            chunk,
         );
     }
 }
@@ -219,6 +223,8 @@ fn test_lang_full(
     score_card: &mut ScoreCard,
     fast_encoder: &FastEncoder,
     mode: CheckMode,
+    max_non_ascii: usize,
+    chunk: usize,
 ) {
     let mut xml = quick_xml::Reader::from_reader(BufReader::new(BzDecoder::new(BufReader::new(
         File::open(path).unwrap(),
@@ -250,6 +256,8 @@ fn test_lang_full(
                             score_card,
                             &fast_encoder,
                             mode,
+                            max_non_ascii,
+                            chunk,
                         );
                     }
                     text.clear();
@@ -436,6 +444,8 @@ fn test_one(
     fast_encoder: &FastEncoder,
     full_articles: bool,
     mode: CheckMode,
+    max_non_ascii: usize,
+    chunk: usize,
 ) -> ScoreCard {
     let path = find_file(dir, lang, full_articles);
     let mut score_card = ScoreCard::new();
@@ -449,6 +459,8 @@ fn test_one(
             &mut score_card,
             fast_encoder,
             mode,
+            max_non_ascii,
+            chunk,
         );
     } else {
         test_lang(
@@ -460,6 +472,8 @@ fn test_one(
             &mut score_card,
             fast_encoder,
             mode,
+            max_non_ascii,
+            chunk,
         );
     }
     score_card
@@ -610,8 +624,39 @@ fn check_chardet(encoding: &'static Encoding, bytes: &[u8]) -> bool {
     expected == actual
 }
 
-fn ng(buffer: &[u8], det: &mut EncodingDetector, tld: Option<&[u8]>) -> &'static Encoding {
-    det.feed(buffer, true);
+fn truncate_by_num_ascii(buffer: &[u8], max_non_ascii: usize) -> &[u8] {
+    let mut non_ascii = 0usize;
+    for (i, &b) in buffer.iter().enumerate() {
+        if non_ascii == max_non_ascii {
+            return &buffer[..i];
+        }
+        if b >= 0x80 {
+            non_ascii += 1;
+        }
+    }
+    buffer
+}
+
+fn ng(
+    buffer: &[u8],
+    det: &mut EncodingDetector,
+    tld: Option<&[u8]>,
+    max_non_ascii: usize,
+    chunk: usize,
+) -> &'static Encoding {
+    let buf = if max_non_ascii == 0 {
+        buffer
+    } else {
+        truncate_by_num_ascii(buffer, max_non_ascii)
+    };
+    if chunk == 0 || chunk >= buf.len() {
+        det.feed(buf, true);
+    } else {
+        for c in buf.chunks(chunk) {
+            det.feed(c, false);
+        }
+        det.feed(b"", true);
+    }
     det.guess(tld, false)
 }
 
@@ -619,9 +664,11 @@ fn check_ng(
     tld: Option<&[u8]>,
     encoding: &'static Encoding,
     bytes: &[u8],
+    max_non_ascii: usize,
+    chunk: usize,
 ) -> Option<(&'static Encoding, String, i64, String, i64, bool)> {
     let mut det = EncodingDetector::new();
-    let detected = ng(&bytes, &mut det, tld);
+    let detected = ng(&bytes, &mut det, tld, max_non_ascii, chunk);
     let (expected, _) = encoding.decode_without_bom_handling(&bytes);
     let (actual, _) = detected.decode_without_bom_handling(&bytes);
     // println!("{:?}", detected);
@@ -779,6 +826,8 @@ fn check(
     score_card: &mut ScoreCard,
     fast_encoder: &FastEncoder,
     mode: CheckMode,
+    max_non_ascii: usize,
+    chunk: usize,
 ) {
     let mut string;
     let slice = if encoding == ISO_8859_8 {
@@ -819,7 +868,7 @@ fn check(
                 expected_text,
                 expected_score,
                 expected_disqualified,
-            )) = check_ng(tld, encoding, &bytes)
+            )) = check_ng(tld, encoding, &bytes, max_non_ascii, chunk)
             {
                 if !print {
                     return;
@@ -843,6 +892,8 @@ fn bench_all(
     total_scores: &mut ScoreCard,
     full_articles: bool,
     mode: CheckMode,
+    max_non_ascii: usize,
+    chunk: usize,
 ) {
     let fast_encoder = FastEncoder::new();
     // There are likely fancy iterator tricks for this.
@@ -871,6 +922,8 @@ fn bench_all(
                 &fast_encoder,
                 full_articles,
                 mode,
+                max_non_ascii,
+                chunk,
             );
             score_card.print(lang, encoding, orthographic);
             score_card
@@ -888,6 +941,8 @@ fn test_all(
     use_tld: bool,
     total_scores: &mut ScoreCard,
     full_articles: bool,
+    max_non_ascii: usize,
+    chunk: usize,
 ) {
     let fast_encoder = FastEncoder::new();
     // There are likely fancy iterator tricks for this.
@@ -916,6 +971,8 @@ fn test_all(
                 &fast_encoder,
                 full_articles,
                 CheckMode::All,
+                max_non_ascii,
+                chunk,
             );
             score_card.print(lang, encoding, orthographic);
             score_card
@@ -976,6 +1033,8 @@ fn main() {
                         &mut score_card,
                         &fast_encoder,
                         CheckMode::All,
+                        0,
+                        0,
                     );
                     score_card.print(input_string, encoding, true);
                 } else {
@@ -996,6 +1055,15 @@ fn main() {
         } else if "all" == command || "tld" == command || "full" == command || "full_tld" == command
         {
             if let Some(dir) = args.next() {
+                let max_non_ascii = if let Some(max_non_ascii_arg) = args.next() {
+                    max_non_ascii_arg
+                        .to_str()
+                        .unwrap()
+                        .parse::<usize>()
+                        .unwrap()
+                } else {
+                    0
+                };
                 let mut score_card = ScoreCard::new();
                 test_all(
                     Path::new(&dir),
@@ -1003,6 +1071,8 @@ fn main() {
                     "tld" == command || "full_tld" == command,
                     &mut score_card,
                     "full" == command || "full_tld" == command,
+                    max_non_ascii,
+                    0,
                 );
                 score_card.print("Combined", X_USER_DEFINED, true);
             } else {
@@ -1011,6 +1081,11 @@ fn main() {
             }
         } else if "bench_ng" == command || "bench_ced" == command {
             if let Some(dir) = args.next() {
+                let chunk = if let Some(chunk_arg) = args.next() {
+                    chunk_arg.to_str().unwrap().parse::<usize>().unwrap()
+                } else {
+                    0
+                };
                 let mut score_card = ScoreCard::new();
                 bench_all(
                     Path::new(&dir),
@@ -1023,6 +1098,8 @@ fn main() {
                     } else {
                         CheckMode::Ced
                     },
+                    0,
+                    chunk,
                 );
                 score_card.print("Combined", X_USER_DEFINED, true);
             } else {
@@ -1033,6 +1110,15 @@ fn main() {
             if let Some(label) = args.next() {
                 if let Some(language) = args.next() {
                     if let Some(path) = args.next() {
+                        let max_non_ascii = if let Some(max_non_ascii_arg) = args.next() {
+                            max_non_ascii_arg
+                                .to_str()
+                                .unwrap()
+                                .parse::<usize>()
+                                .unwrap()
+                        } else {
+                            0
+                        };
                         let mut score_card = ScoreCard::new();
                         let language_str = language.to_str().unwrap();
                         let (lang, tld) = if "langtld" == command {
@@ -1063,6 +1149,8 @@ fn main() {
                             &mut score_card,
                             &fast_encoder,
                             CheckMode::All,
+                            max_non_ascii,
+                            0,
                         );
                         score_card.print(lang, encoding, orthographic);
                     } else {
