@@ -941,6 +941,7 @@ fn test_all(
     use_tld: bool,
     total_scores: &mut ScoreCard,
     full_articles: bool,
+    mode: CheckMode,
     max_non_ascii: usize,
     chunk: usize,
 ) {
@@ -970,7 +971,7 @@ fn test_all(
                 print,
                 &fast_encoder,
                 full_articles,
-                CheckMode::All,
+                mode,
                 max_non_ascii,
                 chunk,
             );
@@ -1052,7 +1053,12 @@ fn main() {
                 eprintln!("Error: Download directory missing.");
                 std::process::exit(-3);
             }
-        } else if "all" == command || "tld" == command || "full" == command || "full_tld" == command
+        } else if "all" == command
+            || "tld" == command
+            || "full" == command
+            || "full_tld" == command
+            || "all_ng" == command
+            || "full_ng" == command
         {
             if let Some(dir) = args.next() {
                 let max_non_ascii = if let Some(max_non_ascii_arg) = args.next() {
@@ -1070,7 +1076,12 @@ fn main() {
                     false,
                     "tld" == command || "full_tld" == command,
                     &mut score_card,
-                    "full" == command || "full_tld" == command,
+                    "full" == command || "full_tld" == command || "full_ng" == command,
+                    if "all" == command || "full" == command {
+                        CheckMode::All
+                    } else {
+                        CheckMode::Ng
+                    },
                     max_non_ascii,
                     0,
                 );
