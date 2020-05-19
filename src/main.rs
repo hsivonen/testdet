@@ -652,8 +652,15 @@ fn ng(
     if chunk == 0 || chunk >= buf.len() {
         det.feed(buf, true);
     } else {
+        let mut first = chunk > 1024;
         for c in buf.chunks(chunk) {
-            det.feed(c, false);
+            if first {
+                first = false;
+                det.feed(&c[..1024], false);
+                det.feed(&c[1024..], false);
+            } else {
+                det.feed(c, false);
+            }
         }
         det.feed(b"", true);
     }
