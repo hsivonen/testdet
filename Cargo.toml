@@ -27,4 +27,4 @@ version = "0.8.17"
 features = ["fast-legacy-encode"]
 
 [features]
-ngrayon = ["chardetng/rayon"]
+ngrayon = ["chardetng/multithreading"]
