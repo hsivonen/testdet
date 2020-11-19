@@ -11,12 +11,14 @@ use bzip2::bufread::BzDecoder;
 use encoding_rs::DecoderResult;
 use encoding_rs::BIG5;
 use encoding_rs::BIG5_INIT;
+use encoding_rs::EUC_JP;
 use encoding_rs::EUC_JP_INIT;
 use encoding_rs::EUC_KR;
 use encoding_rs::EUC_KR_INIT;
 use encoding_rs::GBK;
 use encoding_rs::GBK_INIT;
 use encoding_rs::ISO_8859_13_INIT;
+use encoding_rs::SHIFT_JIS;
 use encoding_rs::SHIFT_JIS_INIT;
 use quick_xml::events::Event;
 use regex::Regex;
@@ -551,35 +553,35 @@ extern "C" {
 
 #[link(name = "icui18n")]
 extern "C" {
-    fn ucsdet_open_60(error: *mut libc::c_int) -> *mut libc::c_void;
-    fn ucsdet_setText_60(
+    fn ucsdet_open_66(error: *mut libc::c_int) -> *mut libc::c_void;
+    fn ucsdet_setText_66(
         det: *mut libc::c_void,
         buf: *const u8,
         buf_len: i32,
         error: *mut libc::c_int,
     );
-    fn ucsdet_enableInputFilter_60(det: *mut libc::c_void, enabled: bool) -> bool;
-    fn ucsdet_detect_60(det: *mut libc::c_void, error: *mut libc::c_int) -> *mut libc::c_void;
-    fn ucsdet_getName_60(guess: *mut libc::c_void, error: *mut libc::c_int) -> *const libc::c_char;
-    fn ucsdet_close_60(det: *mut libc::c_void);
+    fn ucsdet_enableInputFilter_66(det: *mut libc::c_void, enabled: bool) -> bool;
+    fn ucsdet_detect_66(det: *mut libc::c_void, error: *mut libc::c_int) -> *mut libc::c_void;
+    fn ucsdet_getName_66(guess: *mut libc::c_void, error: *mut libc::c_int) -> *const libc::c_char;
+    fn ucsdet_close_66(det: *mut libc::c_void);
 }
 
 fn icu(buffer: &[u8]) -> &'static Encoding {
     unsafe {
         let mut err = 0;
-        let det = ucsdet_open_60(&mut err);
-        ucsdet_enableInputFilter_60(det, true);
-        ucsdet_setText_60(det, buffer.as_ptr(), buffer.len() as i32, &mut err);
-        let guess = ucsdet_detect_60(det, &mut err);
+        let det = ucsdet_open_66(&mut err);
+        ucsdet_enableInputFilter_66(det, true);
+        ucsdet_setText_66(det, buffer.as_ptr(), buffer.len() as i32, &mut err);
+        let guess = ucsdet_detect_66(det, &mut err);
         let ret = if guess.is_null() {
             WINDOWS_1252
         } else {
-            let name_ptr = ucsdet_getName_60(guess, &mut err);
+            let name_ptr = ucsdet_getName_66(guess, &mut err);
             let name_len = libc::strlen(name_ptr);
             let name = std::slice::from_raw_parts(name_ptr as *const u8, name_len);
             Encoding::for_label(name).unwrap_or(WINDOWS_1252)
         };
-        ucsdet_close_60(det);
+        ucsdet_close_66(det);
         ret
     }
 }
@@ -601,10 +603,15 @@ fn ced(buffer: &[u8]) -> &'static Encoding {
     }
 }
 
-fn check_ced(encoding: &'static Encoding, bytes: &[u8]) -> bool {
-    let detected = ced(&bytes);
-    let (expected, _) = encoding.decode_without_bom_handling(&bytes);
-    let (actual, _) = detected.decode_without_bom_handling(&bytes);
+fn check_ced(encoding: &'static Encoding, bytes: &[u8], max_non_ascii: usize) -> bool {
+    let buf = if max_non_ascii == 0 {
+        bytes
+    } else {
+        truncate_by_num_ascii(encoding, bytes, max_non_ascii)
+    };
+    let detected = ced(&buf);
+    let (expected, _) = encoding.decode_without_bom_handling(&buf);
+    let (actual, _) = detected.decode_without_bom_handling(&buf);
     // println!("{:?}", detected);
     expected == actual
 }
@@ -624,7 +631,7 @@ fn check_chardet(encoding: &'static Encoding, bytes: &[u8]) -> bool {
     expected == actual
 }
 
-fn truncate_by_num_ascii(buffer: &[u8], max_non_ascii: usize) -> &[u8] {
+fn truncate_by_num_ascii_impl(buffer: &[u8], max_non_ascii: usize) -> &[u8] {
     let mut non_ascii = 0usize;
     for (i, &b) in buffer.iter().enumerate() {
         if non_ascii == max_non_ascii {
@@ -637,7 +644,50 @@ fn truncate_by_num_ascii(buffer: &[u8], max_non_ascii: usize) -> &[u8] {
     buffer
 }
 
+fn truncate_by_num_ascii<'a>(
+    encoding: &'static Encoding,
+    buffer: &'a [u8],
+    max_non_ascii: usize,
+) -> &'a [u8] {
+    let candidate = truncate_by_num_ascii_impl(buffer, max_non_ascii);
+    if encoding == BIG5
+        || encoding == GBK
+        || encoding == EUC_KR
+        || encoding == EUC_JP
+        || encoding == SHIFT_JIS
+    {
+        let mut decoder = encoding.new_decoder_without_bom_handling();
+        let mut output = [0u16; 1024];
+        let mut input = buffer;
+        loop {
+            let (result, read, _) =
+                decoder.decode_to_utf16_without_replacement(input, &mut output, false);
+            input = &input[read..];
+            match result {
+                DecoderResult::InputEmpty => {
+                    break;
+                }
+                DecoderResult::OutputFull => {
+                    continue;
+                }
+                DecoderResult::Malformed(_, _) => {
+                    unreachable!("Supposed to have input that isn't malformed.");
+                }
+            }
+        }
+        let (result, _, _) = decoder.decode_to_utf16_without_replacement(b"", &mut output, true);
+        if result == DecoderResult::InputEmpty {
+            buffer
+        } else {
+            &buffer[..buffer.len() - 1]
+        }
+    } else {
+        candidate
+    }
+}
+
 fn ng(
+    encoding: &'static Encoding,
     buffer: &[u8],
     det: &mut EncodingDetector,
     tld: Option<&[u8]>,
@@ -647,7 +697,7 @@ fn ng(
     let buf = if max_non_ascii == 0 {
         buffer
     } else {
-        truncate_by_num_ascii(buffer, max_non_ascii)
+        truncate_by_num_ascii(encoding, buffer, max_non_ascii)
     };
     if chunk == 0 || chunk >= buf.len() {
         det.feed(buf, true);
@@ -675,7 +725,7 @@ fn check_ng(
     chunk: usize,
 ) -> Option<(&'static Encoding, String, i64, String, i64, bool)> {
     let mut det = EncodingDetector::new();
-    let detected = ng(&bytes, &mut det, tld, max_non_ascii, chunk);
+    let detected = ng(encoding, &bytes, &mut det, tld, max_non_ascii, chunk);
     let (expected, _) = encoding.decode_without_bom_handling(&bytes);
     let (actual, _) = detected.decode_without_bom_handling(&bytes);
     // println!("{:?}", detected);
@@ -852,7 +902,7 @@ fn check(
             true
         };
         let ced = if mode == CheckMode::All || mode == CheckMode::Ced {
-            check_ced(encoding, &bytes)
+            check_ced(encoding, &bytes, max_non_ascii)
         } else {
             true
         };
@@ -1066,6 +1116,7 @@ fn main() {
             || "full_tld" == command
             || "all_ng" == command
             || "full_ng" == command
+            || "full_ced" == command
         {
             if let Some(dir) = args.next() {
                 let max_non_ascii = if let Some(max_non_ascii_arg) = args.next() {
@@ -1083,9 +1134,14 @@ fn main() {
                     false,
                     "tld" == command || "full_tld" == command,
                     &mut score_card,
-                    "full" == command || "full_tld" == command || "full_ng" == command,
+                    "full" == command
+                        || "full_tld" == command
+                        || "full_ng" == command
+                        || "full_ced" == command,
                     if "all" == command || "full" == command {
                         CheckMode::All
+                    } else if "full_ced" == command {
+                        CheckMode::Ced
                     } else {
                         CheckMode::Ng
                     },
