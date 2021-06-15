@@ -1,2 +1,10 @@
 /target
 **/*.rs.bk
+**/*.tsv
+**/*.tsv#
+**/*.csv
+**/*.csv#
+**/*.ods
+**/*.ods#
+**/*.html
+**/*.txt
